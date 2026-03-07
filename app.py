@@ -16,15 +16,14 @@ HEADERS = {
 }
 
 UK_TZ = pytz.timezone("Europe/London")
-_cache = {}  # {date_str: (corridas, timestamp)}
+_cache = {}
 
 def deve_atualizar(date_str):
     if date_str not in _cache:
         return True
     _, saved_at = _cache[date_str]
     saved_dt = datetime.fromtimestamp(saved_at, UK_TZ)
-    now_uk   = datetime.now(UK_TZ)
-    # Atualiza se mudou o dia UK
+    now_uk = datetime.now(UK_TZ)
     return saved_dt.date() != now_uk.date()
 
 def buscar_e_salvar(date_str):
@@ -50,12 +49,10 @@ def racecards():
     date = request.args.get("date", "")
     if not date:
         date = datetime.now(UK_TZ).strftime("%Y-%m-%d")
-
     if deve_atualizar(date):
         corridas = buscar_e_salvar(date)
     else:
         corridas, _ = _cache[date]
-
     return jsonify(corridas)
 
 @app.route("/status")
@@ -70,12 +67,3 @@ def status():
 
 if __name__ == "__main__":
     app.run()
-```
-
-Também adiciona `pytz` no **requirements.txt**:
-```
-flask
-flask-cors
-requests
-gunicorn
-pytz
