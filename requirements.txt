@@ -3,3 +3,4 @@ flask-cors
 requests
 gunicorn
 pytz
+python-telegram-bot==22.6
