@@ -69,7 +69,7 @@ def start_bot():
             filters.TEXT & ~filters.COMMAND, handler_menu
         ))
         log.info("🐴 Bot Telegram iniciado!")
-        async with telegram_app:
+    async with telegram_app:
             await telegram_app.start()
             await telegram_app.updater.start_polling(drop_pending_updates=True)
             await asyncio.Event().wait()
