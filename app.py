@@ -11,14 +11,11 @@ from flask_cors import CORS
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger(__name__)
 
-RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
-BOT_TOKEN    = os.environ.get("BOT_TOKEN", "")
-UK_TZ        = pytz.timezone("Europe/London")
-BR_TZ        = pytz.timezone("America/Sao_Paulo")
-HEADERS      = {
-    "x-rapidapi-host": "horse-racing.p.rapidapi.com",
-    "x-rapidapi-key":  RAPIDAPI_KEY,
-}
+RAPIDAPI_KEY        = os.environ.get("RAPIDAPI_KEY", "")
+RAPIDAPI_KEY_BACKUP = os.environ.get("RAPIDAPI_KEY_BACKUP", "")
+BOT_TOKEN           = os.environ.get("BOT_TOKEN", "")
+UK_TZ               = pytz.timezone("Europe/London")
+BR_TZ               = pytz.timezone("America/Sao_Paulo")
 
 app = Flask(__name__)
 CORS(app)
@@ -31,23 +28,33 @@ def deve_atualizar(date_str):
     saved_dt = datetime.fromtimestamp(saved_at, UK_TZ)
     return saved_dt.date() != datetime.now(UK_TZ).date()
 
+def buscar_com_chave(date_str, api_key):
+    r = requests.get(
+        "https://horse-racing.p.rapidapi.com/racecards",
+        headers={
+            "x-rapidapi-host": "horse-racing.p.rapidapi.com",
+            "x-rapidapi-key":  api_key,
+        },
+        params={"date": date_str},
+        timeout=10
+    )
+    r.raise_for_status()
+    data = r.json()
+    return list(data.values()) if isinstance(data, dict) else data
+
 def buscar_e_salvar(date_str):
-    try:
-        r = requests.get(
-            "https://horse-racing.p.rapidapi.com/racecards",
-            headers=HEADERS,
-            params={"date": date_str},
-            timeout=10
-        )
-        r.raise_for_status()
-        data     = r.json()
-        corridas = list(data.values()) if isinstance(data, dict) else data
-        _cache[date_str] = (corridas, time.time())
-        log.info(f"Cache: {date_str} — {len(corridas)} corridas")
-        return corridas
-    except Exception as e:
-        log.error(f"Erro API: {e}")
-        return _cache[date_str][0] if date_str in _cache else []
+    for label, key in [("principal", RAPIDAPI_KEY), ("backup", RAPIDAPI_KEY_BACKUP)]:
+        if not key:
+            continue
+        try:
+            corridas = buscar_com_chave(date_str, key)
+            _cache[date_str] = (corridas, time.time())
+            log.info(f"Cache ({label}): {date_str} — {len(corridas)} corridas")
+            return corridas
+        except Exception as e:
+            log.warning(f"Chave {label} falhou: {e}")
+    log.error("Ambas as chaves falharam!")
+    return _cache[date_str][0] if date_str in _cache else []
 
 @app.route("/racecards")
 def racecards():
