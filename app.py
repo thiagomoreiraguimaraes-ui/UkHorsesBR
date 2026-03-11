@@ -20,11 +20,7 @@ BR_TZ               = pytz.timezone("America/Sao_Paulo")
 app = Flask(__name__)
 CORS(app)
 _cache = {}
-
-# ─── ALERTAS ─────────────────────────────────────────────────────
-# {chat_id: [{brt: "14:25", texto: "...", enviado: False}]}
-_alertas = {}
-_aguardando_selecao = {}  # {chat_id: [lista de corridas]}
+_alertas = {}  # {chat_id: [{brt, texto, enviado}]}
 
 def deve_atualizar(date_str):
     if date_str not in _cache:
@@ -67,8 +63,7 @@ def get_corridas(date_str):
 @app.route("/racecards")
 def racecards():
     date = request.args.get("date", datetime.now(UK_TZ).strftime("%Y-%m-%d"))
-    corridas = get_corridas(date)
-    return jsonify(corridas)
+    return jsonify(get_corridas(date))
 
 @app.route("/status")
 def status():
@@ -80,7 +75,6 @@ def status():
         }
     return jsonify(info)
 
-# ─── HELPERS ─────────────────────────────────────────────────────
 IRLANDA = {
     "naas","leopardstown","curragh","the curragh","fairyhouse",
     "punchestown","gowran park","gowran","tipperary","cork",
@@ -122,10 +116,8 @@ def uk_para_brt(date_field):
         return "??:??", None
 
 def data_hoje_uk():
-    """Retorna a data UK atual — mas se for depois das 21h BRT usa data BRT"""
     now_brt = datetime.now(BR_TZ)
     now_uk  = datetime.now(UK_TZ)
-    # Se UK já virou para o dia seguinte mas BRT ainda não, usa data de hoje BRT convertida para UK
     if now_uk.date() > now_brt.date():
         return now_brt.strftime("%Y-%m-%d")
     return now_uk.strftime("%Y-%m-%d")
@@ -133,10 +125,10 @@ def data_hoje_uk():
 def processar_corridas(corridas, filtro=None):
     resultado = []
     for r in corridas:
-        course = r.get("course", "?")
-        tipo   = tipo_corrida(r.get("title", ""))
-        flag   = bandeira(course)
-        dist   = r.get("distance", "?")
+        course      = r.get("course", "?")
+        tipo        = tipo_corrida(r.get("title", ""))
+        flag        = bandeira(course)
+        dist        = r.get("distance", "?")
         brt, brt_dt = uk_para_brt(r.get("date", ""))
 
         if filtro == "FLAT" and tipo in JUMP_TIPOS: continue
@@ -145,66 +137,58 @@ def processar_corridas(corridas, filtro=None):
         if filtro == "IE"   and flag != "🇮🇪": continue
 
         resultado.append({
-            "sort": brt,
-            "brt": brt,
+            "sort":   brt,
+            "brt":    brt,
             "brt_dt": brt_dt,
-            "texto": f"{flag} {brt} - {course} - {tipo} - {dist}",
-            "flag": flag,
+            "texto":  f"{flag} {brt} - {course} - {tipo} - {dist}",
+            "flag":   flag,
             "course": course,
-            "tipo": tipo,
-            "dist": dist,
+            "tipo":   tipo,
+            "dist":   dist,
         })
 
     resultado.sort(key=lambda x: x["sort"])
     return resultado
 
 def formatar(corridas, titulo, filtro=None):
-    now_brt = datetime.now(BR_TZ).strftime("%H:%M")
-    now_uk  = datetime.now(UK_TZ)
-    fuso    = "BST" if bool(now_uk.dst()) else "GMT"
-    data_label = datetime.now(BR_TZ).strftime("%d/%m/%Y")
-    linhas  = processar_corridas(corridas, filtro)
-    uk_c    = sum(1 for l in linhas if l["flag"] == "🇬🇧")
-    ie_c    = sum(1 for l in linhas if l["flag"] == "🇮🇪")
+    now_brt    = datetime.now(BR_TZ)
+    now_brt_str = now_brt.strftime("%H:%M")
+    now_uk     = datetime.now(UK_TZ)
+    fuso       = "BST" if bool(now_uk.dst()) else "GMT"
+    data_label = now_brt.strftime("%d/%m/%Y")
+    linhas     = processar_corridas(corridas, filtro)
+
+    uk_c   = sum(1 for l in linhas if l["flag"] == "🇬🇧")
+    ie_c   = sum(1 for l in linhas if l["flag"] == "🇮🇪")
+    flat_c = sum(1 for l in linhas if l["tipo"] not in JUMP_TIPOS)
+    jump_c = sum(1 for l in linhas if l["tipo"] in JUMP_TIPOS)
 
     txt  = f"🏇 *CORRIDAS UK & IRLANDA*\n"
     txt += f"📅 *{titulo}* — {data_label}\n"
-    txt += f"🇧🇷 {now_brt} | 🇬🇧 {now_uk.strftime('%H:%M')} ({fuso})\n"
+    txt += f"🇧🇷 {now_brt_str} | 🇬🇧 {now_uk.strftime('%H:%M')} ({fuso})\n"
     txt += f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-    txt += "\n".join(l["texto"] for l in linhas) if linhas else "_Nenhuma corrida._"
-    txt += f"\n\n━━━━━━━━━━━━━━━━━━━━━\n"
-    txt += f"🏁 {len(linhas)} corridas  |  🇬🇧 {uk_c}  🇮🇪 {ie_c}"
-    return txt
 
-def formatar_com_numeros(corridas, filtro=None):
-    """Formata corridas numeradas para seleção de alertas"""
-    linhas = processar_corridas(corridas, filtro)
-    now_brt = datetime.now(BR_TZ).strftime("%H:%M")
-    now_uk  = datetime.now(UK_TZ)
-    fuso    = "BST" if bool(now_uk.dst()) else "GMT"
+    for l in linhas:
+        # Risca corridas já passadas
+        if l["brt_dt"] and l["brt_dt"] < now_brt:
+            txt += f"~{l['texto']}~\n"
+        else:
+            txt += f"{l['texto']}\n"
 
-    txt  = f"🔔 *SELECIONAR ALERTAS*\n"
-    txt += f"🇧🇷 {now_brt} | 🇬🇧 {now_uk.strftime('%H:%M')} ({fuso})\n"
-    txt += f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-    txt += "Digite os números das corridas que quer ser avisado *5 minutos antes*:\n\n"
-
-    for i, l in enumerate(linhas, 1):
-        txt += f"`{i:2d}.` {l['texto']}\n"
+    if not linhas:
+        txt += "_Nenhuma corrida._\n"
 
     txt += f"\n━━━━━━━━━━━━━━━━━━━━━\n"
-    txt += f"Ex: `1 3 7` para alertar 3 corridas\n"
-    txt += f"Digite `0` para cancelar"
-    return txt, linhas
+    txt += f"🏁 {len(linhas)} corridas  |  🇬🇧 {uk_c}  🇮🇪 {ie_c}  |  ⚡ {flat_c}  🌿 {jump_c}"
+    return txt
 
-# ─── WORKER DE ALERTAS ───────────────────────────────────────────
 def worker_alertas(bot_app):
     import asyncio
 
-    async def enviar_alertas():
+    async def loop():
         while True:
-            now_brt = datetime.now(BR_TZ)
-            now_str = now_brt.strftime("%H:%M")
-
+            now_brt     = datetime.now(BR_TZ)
+            now_str     = now_brt.strftime("%H:%M")
             for chat_id, alertas in list(_alertas.items()):
                 for alerta in alertas:
                     if not alerta["enviado"] and alerta["brt"] == now_str:
@@ -215,34 +199,26 @@ def worker_alertas(bot_app):
                                 parse_mode="Markdown"
                             )
                             alerta["enviado"] = True
-                            log.info(f"Alerta enviado para {chat_id}: {alerta['texto']}")
                         except Exception as e:
-                            log.error(f"Erro ao enviar alerta: {e}")
-
-            # Limpa alertas enviados e passados
+                            log.error(f"Erro alerta: {e}")
             for chat_id in list(_alertas.keys()):
-                _alertas[chat_id] = [
-                    a for a in _alertas[chat_id]
-                    if not a["enviado"]
-                ]
+                _alertas[chat_id] = [a for a in _alertas[chat_id] if not a["enviado"]]
                 if not _alertas[chat_id]:
                     del _alertas[chat_id]
-
             await asyncio.sleep(30)
 
-    asyncio.run(enviar_alertas())
+    asyncio.run(loop())
 
-# ─── BOT ─────────────────────────────────────────────────────────
 def start_bot():
     import asyncio
-    from telegram import Update, ReplyKeyboardMarkup
-    from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+    from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
     MENU = ReplyKeyboardMarkup(
-        [["🗓 Hoje","🔔 Alertas"],
-         ["⚡ Flat","🌿 Jump"],
-         ["🇬🇧 Só UK","🇮🇪 Só Irlanda"],
-         ["🏇 Todas","🕐 Horário"]],
+        [["🗓 Hoje", "🔔 Alertas"],
+         ["⚡ Flat", "🌿 Jump"],
+         ["🇬🇧 Só UK", "🇮🇪 Só Irlanda"],
+         ["🏇 Todas", "🕐 Horário"]],
         resize_keyboard=True, is_persistent=True
     )
 
@@ -272,71 +248,103 @@ def start_bot():
             parse_mode="Markdown", reply_markup=MENU
         )
 
-    async def handler_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-        texto   = update.message.text
-        chat_id = update.message.chat_id
-
-        # Verifica se usuário está selecionando alertas
-        if chat_id in _aguardando_selecao:
-            if texto.strip() == "0":
-                del _aguardando_selecao[chat_id]
-                await update.message.reply_text("❌ Alertas cancelados.", reply_markup=MENU)
-                return
-
-            corridas_lista = _aguardando_selecao[chat_id]
-            try:
-                numeros = [int(n) for n in texto.strip().split() if n.isdigit()]
-                selecionadas = [corridas_lista[n-1] for n in numeros if 1 <= n <= len(corridas_lista)]
-
-                if not selecionadas:
-                    await update.message.reply_text("❌ Números inválidos. Tente novamente ou digite `0` para cancelar.", parse_mode="Markdown", reply_markup=MENU)
-                    return
-
-                # Calcula horário do alerta (5 min antes)
-                novos_alertas = []
-                for c in selecionadas:
-                    if c["brt_dt"]:
-                        alerta_dt  = c["brt_dt"] - timedelta(minutes=5)
-                        alerta_brt = alerta_dt.strftime("%H:%M")
-                        novos_alertas.append({
-                            "brt": alerta_brt,
-                            "texto": c["texto"],
-                            "enviado": False
-                        })
-
-                if chat_id not in _alertas:
-                    _alertas[chat_id] = []
-                _alertas[chat_id].extend(novos_alertas)
-                del _aguardando_selecao[chat_id]
-
-                confirmacao = "\n".join(f"✅ {a['texto']} → alerta às {a['brt']} BRT" for a in novos_alertas)
-                await update.message.reply_text(
-                    f"🔔 *Alertas definidos!*\n\n{confirmacao}",
-                    parse_mode="Markdown", reply_markup=MENU
-                )
-            except Exception as e:
-                log.error(f"Erro alertas: {e}")
-                await update.message.reply_text("❌ Erro ao processar. Tente novamente.", reply_markup=MENU)
+    async def mostrar_alertas(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        msg = await update.message.reply_text("⏳ Buscando corridas...")
+        corridas = get_corridas(data_hoje_uk())
+        await msg.delete()
+        if not corridas:
+            await update.message.reply_text("❌ Nenhuma corrida hoje.", reply_markup=MENU)
             return
 
-        # Menu normal
-        if   texto in ["🗓 Hoje", "/hoje"]:       await mostrar_hoje(update)
-        elif texto in ["⚡ Flat", "/flat"]:        await mostrar_hoje(update, filtro="FLAT", titulo="FLAT")
-        elif texto in ["🌿 Jump", "/jump"]:        await mostrar_hoje(update, filtro="JUMP", titulo="JUMP")
-        elif texto in ["🇬🇧 Só UK", "/uk"]:        await mostrar_hoje(update, filtro="UK",   titulo="SÓ UK")
-        elif texto in ["🇮🇪 Só Irlanda","/irlanda"]: await mostrar_hoje(update, filtro="IE", titulo="SÓ IRLANDA")
-        elif texto in ["🏇 Todas", "/todas"]:      await mostrar_hoje(update, titulo="TODAS")
-        elif texto in ["🔔 Alertas", "/alertas"]:
-            msg = await update.message.reply_text("⏳ Buscando corridas...")
-            corridas = get_corridas(data_hoje_uk())
-            await msg.delete()
-            if not corridas:
-                await update.message.reply_text("❌ Nenhuma corrida hoje.", reply_markup=MENU)
+        linhas  = processar_corridas(corridas)
+        chat_id = update.message.chat_id
+
+        # Alertas já definidos para esse chat
+        alertas_ativos = {a["texto"] for a in _alertas.get(chat_id, [])}
+
+        # Monta botões inline — 1 por linha
+        keyboard = []
+        ctx.user_data["corridas_alerta"] = linhas
+        for i, l in enumerate(linhas):
+            ativo  = l["texto"] in alertas_ativos
+            emoji  = "🔔" if ativo else "🔕"
+            label  = f"{emoji} {l['brt']} - {l['course']} - {l['tipo']}"
+            keyboard.append([InlineKeyboardButton(label, callback_data=f"alerta_{i}")])
+
+        keyboard.append([InlineKeyboardButton("✅ Confirmar alertas", callback_data="alerta_confirmar")])
+        keyboard.append([InlineKeyboardButton("❌ Cancelar tudo",     callback_data="alerta_cancelar")])
+
+        await update.message.reply_text(
+            "🔔 *DEFINIR ALERTAS*\n\nToque nas corridas para ativar/desativar alerta *5 min antes*:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    async def callback_alerta(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        query   = update.callback_query
+        chat_id = query.message.chat_id
+        data    = query.data
+        await query.answer()
+
+        if data == "alerta_cancelar":
+            if chat_id in _alertas:
+                del _alertas[chat_id]
+            await query.edit_message_text("❌ Todos os alertas cancelados.")
+            return
+
+        if data == "alerta_confirmar":
+            n = len(_alertas.get(chat_id, []))
+            await query.edit_message_text(f"✅ *{n} alertas confirmados!*\nVocê será avisado 5 min antes de cada corrida.", parse_mode="Markdown")
+            return
+
+        if data.startswith("alerta_"):
+            idx     = int(data.split("_")[1])
+            linhas  = ctx.user_data.get("corridas_alerta", [])
+            if idx >= len(linhas):
                 return
-            txt, lista = formatar_com_numeros(corridas)
-            _aguardando_selecao[chat_id] = lista
-            await update.message.reply_text(txt, parse_mode="Markdown")
-        elif texto in ["🕐 Horário", "/horario"]:
+            corrida = linhas[idx]
+
+            if chat_id not in _alertas:
+                _alertas[chat_id] = []
+
+            alertas_ativos = {a["texto"] for a in _alertas[chat_id]}
+
+            if corrida["texto"] in alertas_ativos:
+                # Remove alerta
+                _alertas[chat_id] = [a for a in _alertas[chat_id] if a["texto"] != corrida["texto"]]
+            else:
+                # Adiciona alerta
+                if corrida["brt_dt"]:
+                    alerta_dt = corrida["brt_dt"] - timedelta(minutes=5)
+                    _alertas[chat_id].append({
+                        "brt":     alerta_dt.strftime("%H:%M"),
+                        "texto":   corrida["texto"],
+                        "enviado": False
+                    })
+
+            # Atualiza botões
+            alertas_ativos = {a["texto"] for a in _alertas.get(chat_id, [])}
+            keyboard = []
+            for i, l in enumerate(linhas):
+                ativo = l["texto"] in alertas_ativos
+                emoji = "🔔" if ativo else "🔕"
+                label = f"{emoji} {l['brt']} - {l['course']} - {l['tipo']}"
+                keyboard.append([InlineKeyboardButton(label, callback_data=f"alerta_{i}")])
+            keyboard.append([InlineKeyboardButton("✅ Confirmar alertas", callback_data="alerta_confirmar")])
+            keyboard.append([InlineKeyboardButton("❌ Cancelar tudo",     callback_data="alerta_cancelar")])
+
+            await query.edit_message_reply_markup(InlineKeyboardMarkup(keyboard))
+
+    async def handler_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        texto = update.message.text
+        if   texto in ["🗓 Hoje",        "/hoje"]:    await mostrar_hoje(update)
+        elif texto in ["⚡ Flat",         "/flat"]:    await mostrar_hoje(update, filtro="FLAT",  titulo="FLAT")
+        elif texto in ["🌿 Jump",         "/jump"]:    await mostrar_hoje(update, filtro="JUMP",  titulo="JUMP")
+        elif texto in ["🇬🇧 Só UK",       "/uk"]:      await mostrar_hoje(update, filtro="UK",    titulo="SÓ UK")
+        elif texto in ["🇮🇪 Só Irlanda",  "/irlanda"]: await mostrar_hoje(update, filtro="IE",    titulo="SÓ IRLANDA")
+        elif texto in ["🏇 Todas",        "/todas"]:   await mostrar_hoje(update, titulo="TODAS")
+        elif texto in ["🔔 Alertas",      "/alertas"]: await mostrar_alertas(update, ctx)
+        elif texto in ["🕐 Horário",      "/horario"]:
             now_uk  = datetime.now(UK_TZ)
             now_brt = datetime.now(BR_TZ)
             dst     = bool(now_uk.dst())
@@ -351,27 +359,21 @@ def start_bot():
 
     async def run():
         telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
-        telegram_app.add_handler(CommandHandler("start",    cmd_start))
-        telegram_app.add_handler(CommandHandler("hoje",     handler_menu))
-        telegram_app.add_handler(CommandHandler("flat",     handler_menu))
-        telegram_app.add_handler(CommandHandler("jump",     handler_menu))
-        telegram_app.add_handler(CommandHandler("uk",       handler_menu))
-        telegram_app.add_handler(CommandHandler("irlanda",  handler_menu))
-        telegram_app.add_handler(CommandHandler("todas",    handler_menu))
-        telegram_app.add_handler(CommandHandler("alertas",  handler_menu))
-        telegram_app.add_handler(CommandHandler("horario",  handler_menu))
-        telegram_app.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND, handler_menu
-        ))
+        telegram_app.add_handler(CommandHandler("start",   cmd_start))
+        telegram_app.add_handler(CommandHandler("hoje",    handler_menu))
+        telegram_app.add_handler(CommandHandler("flat",    handler_menu))
+        telegram_app.add_handler(CommandHandler("jump",    handler_menu))
+        telegram_app.add_handler(CommandHandler("uk",      handler_menu))
+        telegram_app.add_handler(CommandHandler("irlanda", handler_menu))
+        telegram_app.add_handler(CommandHandler("todas",   handler_menu))
+        telegram_app.add_handler(CommandHandler("alertas", handler_menu))
+        telegram_app.add_handler(CommandHandler("horario", handler_menu))
+        telegram_app.add_handler(CallbackQueryHandler(callback_alerta))
+        telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler_menu))
+
+        threading.Thread(target=worker_alertas, args=(telegram_app,), daemon=True).start()
+
         log.info("🐴 Bot Telegram iniciado!")
-
-        # Inicia worker de alertas em thread separada
-        threading.Thread(
-            target=worker_alertas,
-            args=(telegram_app,),
-            daemon=True
-        ).start()
-
         async with telegram_app:
             await telegram_app.start()
             await telegram_app.updater.start_polling(drop_pending_updates=True)
