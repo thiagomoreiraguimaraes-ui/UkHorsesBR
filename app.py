@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import logging
 import threading
@@ -19,23 +20,27 @@ BR_TZ               = pytz.timezone("America/Sao_Paulo")
 
 app = Flask(__name__)
 CORS(app)
-_cache = {}
+_cache   = {}
 _alertas = {}  # {chat_id: [{brt, texto, enviado}]}
+
+# ─── UTILS ───────────────────────────────────────────────────────
+
+def esc(text):
+    """Escapa caracteres especiais para MarkdownV2"""
+    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!\\])', r'\\\1', str(text))
+
+# ─── API / CACHE ─────────────────────────────────────────────────
 
 def deve_atualizar(date_str):
     if date_str not in _cache:
         return True
     _, saved_at = _cache[date_str]
-    saved_dt = datetime.fromtimestamp(saved_at, UK_TZ)
-    return saved_dt.date() != datetime.now(UK_TZ).date()
+    return datetime.fromtimestamp(saved_at, UK_TZ).date() != datetime.now(UK_TZ).date()
 
 def buscar_com_chave(date_str, api_key):
     r = requests.get(
         "https://horse-racing.p.rapidapi.com/racecards",
-        headers={
-            "x-rapidapi-host": "horse-racing.p.rapidapi.com",
-            "x-rapidapi-key":  api_key,
-        },
+        headers={"x-rapidapi-host": "horse-racing.p.rapidapi.com", "x-rapidapi-key": api_key},
         params={"date": date_str},
         timeout=10
     )
@@ -60,6 +65,17 @@ def buscar_e_salvar(date_str):
 def get_corridas(date_str):
     return buscar_e_salvar(date_str) if deve_atualizar(date_str) else _cache[date_str][0]
 
+def data_hoje_brt():
+    """Retorna a data de hoje no fuso BRT convertida para string UK-format"""
+    now_brt = datetime.now(BR_TZ)
+    now_uk  = datetime.now(UK_TZ)
+    # Se UK já virou para amanhã mas BRT ainda não, usa data BRT
+    if now_uk.date() > now_brt.date():
+        return now_brt.strftime("%Y-%m-%d")
+    return now_uk.strftime("%Y-%m-%d")
+
+# ─── FLASK ───────────────────────────────────────────────────────
+
 @app.route("/racecards")
 def racecards():
     date = request.args.get("date", datetime.now(UK_TZ).strftime("%Y-%m-%d"))
@@ -74,6 +90,8 @@ def status():
             "salvo_em": datetime.fromtimestamp(ts, UK_TZ).strftime("%H:%M UK")
         }
     return jsonify(info)
+
+# ─── HELPERS CORRIDAS ────────────────────────────────────────────
 
 IRLANDA = {
     "naas","leopardstown","curragh","the curragh","fairyhouse",
@@ -115,13 +133,6 @@ def uk_para_brt(date_field):
     except:
         return "??:??", None
 
-def data_hoje_uk():
-    now_brt = datetime.now(BR_TZ)
-    now_uk  = datetime.now(UK_TZ)
-    if now_uk.date() > now_brt.date():
-        return now_brt.strftime("%Y-%m-%d")
-    return now_uk.strftime("%Y-%m-%d")
-
 def processar_corridas(corridas, filtro=None):
     resultado = []
     for r in corridas:
@@ -151,12 +162,12 @@ def processar_corridas(corridas, filtro=None):
     return resultado
 
 def formatar(corridas, titulo, filtro=None):
-    now_brt    = datetime.now(BR_TZ)
+    now_brt     = datetime.now(BR_TZ)
     now_brt_str = now_brt.strftime("%H:%M")
-    now_uk     = datetime.now(UK_TZ)
-    fuso       = "BST" if bool(now_uk.dst()) else "GMT"
-    data_label = now_brt.strftime("%d/%m/%Y")
-    linhas     = processar_corridas(corridas, filtro)
+    now_uk      = datetime.now(UK_TZ)
+    fuso        = "BST" if bool(now_uk.dst()) else "GMT"
+    data_label  = now_brt.strftime("%d/%m/%Y")
+    linhas      = processar_corridas(corridas, filtro)
 
     uk_c   = sum(1 for l in linhas if l["flag"] == "🇬🇧")
     ie_c   = sum(1 for l in linhas if l["flag"] == "🇮🇪")
@@ -164,41 +175,44 @@ def formatar(corridas, titulo, filtro=None):
     jump_c = sum(1 for l in linhas if l["tipo"] in JUMP_TIPOS)
 
     txt  = f"🏇 *CORRIDAS UK & IRLANDA*\n"
-    txt += f"📅 *{titulo}* — {data_label}\n"
-    txt += f"🇧🇷 {now_brt_str} | 🇬🇧 {now_uk.strftime('%H:%M')} ({fuso})\n"
+    txt += f"📅 *{esc(titulo)}* — {esc(data_label)}\n"
+    txt += f"🇧🇷 {esc(now_brt_str)} \\| 🇬🇧 {esc(now_uk.strftime('%H:%M'))} \\({esc(fuso)}\\)\n"
     txt += f"━━━━━━━━━━━━━━━━━━━━━\n\n"
 
     for l in linhas:
-        # Risca corridas já passadas
+        linha_esc = esc(l['texto'])
         if l["brt_dt"] and l["brt_dt"] < now_brt:
-            txt += f"~{l['texto']}~\n"
+            txt += f"~{linha_esc}~\n"
         else:
-            txt += f"{l['texto']}\n"
+            txt += f"{linha_esc}\n"
 
     if not linhas:
-        txt += "_Nenhuma corrida._\n"
+        txt += "_Nenhuma corrida\\._\n"
 
     txt += f"\n━━━━━━━━━━━━━━━━━━━━━\n"
-    txt += f"🏁 {len(linhas)} corridas  |  🇬🇧 {uk_c}  🇮🇪 {ie_c}  |  ⚡ {flat_c}  🌿 {jump_c}"
+    txt += f"🎯 {len(linhas)} corridas  \\|  🇬🇧 {uk_c}  🇮🇪 {ie_c}  \\|  🏁 {flat_c} flat  🚧 {jump_c} jump"
     return txt
+
+# ─── WORKER ALERTAS ──────────────────────────────────────────────
 
 def worker_alertas(bot_app):
     import asyncio
 
     async def loop():
         while True:
-            now_brt     = datetime.now(BR_TZ)
-            now_str     = now_brt.strftime("%H:%M")
+            now_brt = datetime.now(BR_TZ)
+            now_str = now_brt.strftime("%H:%M")
             for chat_id, alertas in list(_alertas.items()):
                 for alerta in alertas:
                     if not alerta["enviado"] and alerta["brt"] == now_str:
                         try:
                             await bot_app.bot.send_message(
                                 chat_id=chat_id,
-                                text=f"🔔 *CORRIDA EM 5 MINUTOS!*\n\n{alerta['texto']}\n\n⏰ Agora: {now_str} BRT",
-                                parse_mode="Markdown"
+                                text=f"🔔 *CORRIDA EM 5 MINUTOS\\!*\n\n{esc(alerta['texto'])}\n\n⏰ Agora: {esc(now_str)} BRT",
+                                parse_mode="MarkdownV2"
                             )
                             alerta["enviado"] = True
+                            log.info(f"Alerta enviado para {chat_id}")
                         except Exception as e:
                             log.error(f"Erro alerta: {e}")
             for chat_id in list(_alertas.keys()):
@@ -209,16 +223,19 @@ def worker_alertas(bot_app):
 
     asyncio.run(loop())
 
+# ─── BOT ─────────────────────────────────────────────────────────
+
 def start_bot():
     import asyncio
     from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
-    from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+    from telegram.ext import (ApplicationBuilder, CommandHandler, MessageHandler,
+                               CallbackQueryHandler, filters, ContextTypes)
 
     MENU = ReplyKeyboardMarkup(
-        [["🗓 Hoje", "🔔 Alertas"],
-         ["⚡ Flat", "🌿 Jump"],
-         ["🇬🇧 Só UK", "🇮🇪 Só Irlanda"],
-         ["🏇 Todas", "🕐 Horário"]],
+        [["🗓 Hoje",    "🔔 Alertas"],
+         ["⚡ Flat",    "🌿 Jump"],
+         ["🇬🇧 Só UK",  "🇮🇪 Só Irlanda"],
+         ["🏇 Todas",   "🕐 Horário"]],
         resize_keyboard=True, is_persistent=True
     )
 
@@ -226,57 +243,53 @@ def start_bot():
         now_uk  = datetime.now(UK_TZ)
         now_brt = datetime.now(BR_TZ)
         diff    = int((now_uk.utcoffset() - now_brt.utcoffset()).total_seconds() / 3600)
-        dst     = bool(now_uk.dst())
+        fuso    = "BST verão" if bool(now_uk.dst()) else "GMT inverno"
         await update.message.reply_text(
-            f"🐴 *Bem-vindo ao UKHorsesBR!*\n\n"
-            f"Corridas de UK & Irlanda em horário de Brasília.\n\n"
+            f"🐴 *Bem\\-vindo ao UKHorsesBR\\!*\n\n"
+            f"Corridas de UK & Irlanda em horário de Brasília\\.\n\n"
             f"🕐 🇬🇧 `{now_uk.strftime('%H:%M')}` → 🇧🇷 `{now_brt.strftime('%H:%M')}`\n"
-            f"UK está *{diff}h à frente* ({'BST verão' if dst else 'GMT inverno'})\n\n"
+            f"UK está *{diff}h à frente* \\({esc(fuso)}\\)\n\n"
             f"Use os botões abaixo 👇",
-            parse_mode="Markdown", reply_markup=MENU
+            parse_mode="MarkdownV2", reply_markup=MENU
         )
 
     async def mostrar_hoje(update, filtro=None, titulo="HOJE"):
         msg = await update.message.reply_text("⏳ Buscando...")
-        corridas = get_corridas(data_hoje_uk())
+        corridas = get_corridas(data_hoje_brt())
         await msg.delete()
         if not corridas:
-            await update.message.reply_text("❌ Nenhuma corrida encontrada.", reply_markup=MENU)
+            await update.message.reply_text("❌ Nenhuma corrida encontrada\\.", reply_markup=MENU)
             return
         await update.message.reply_text(
             formatar(corridas, titulo, filtro=filtro),
-            parse_mode="Markdown", reply_markup=MENU
+            parse_mode="MarkdownV2", reply_markup=MENU
         )
 
     async def mostrar_alertas(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         msg = await update.message.reply_text("⏳ Buscando corridas...")
-        corridas = get_corridas(data_hoje_uk())
+        corridas = get_corridas(data_hoje_brt())
         await msg.delete()
         if not corridas:
-            await update.message.reply_text("❌ Nenhuma corrida hoje.", reply_markup=MENU)
+            await update.message.reply_text("❌ Nenhuma corrida hoje\\.", reply_markup=MENU)
             return
 
         linhas  = processar_corridas(corridas)
         chat_id = update.message.chat_id
-
-        # Alertas já definidos para esse chat
+        ctx.user_data["corridas_alerta"] = linhas
         alertas_ativos = {a["texto"] for a in _alertas.get(chat_id, [])}
 
-        # Monta botões inline — 1 por linha
         keyboard = []
-        ctx.user_data["corridas_alerta"] = linhas
         for i, l in enumerate(linhas):
-            ativo  = l["texto"] in alertas_ativos
-            emoji  = "🔔" if ativo else "🔕"
-            label  = f"{emoji} {l['brt']} - {l['course']} - {l['tipo']}"
+            ativo = l["texto"] in alertas_ativos
+            emoji = "🔔" if ativo else "🔕"
+            label = f"{emoji} {l['brt']} - {l['course']} - {l['tipo']}"
             keyboard.append([InlineKeyboardButton(label, callback_data=f"alerta_{i}")])
-
         keyboard.append([InlineKeyboardButton("✅ Confirmar alertas", callback_data="alerta_confirmar")])
         keyboard.append([InlineKeyboardButton("❌ Cancelar tudo",     callback_data="alerta_cancelar")])
 
         await update.message.reply_text(
             "🔔 *DEFINIR ALERTAS*\n\nToque nas corridas para ativar/desativar alerta *5 min antes*:",
-            parse_mode="Markdown",
+            parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
@@ -289,12 +302,15 @@ def start_bot():
         if data == "alerta_cancelar":
             if chat_id in _alertas:
                 del _alertas[chat_id]
-            await query.edit_message_text("❌ Todos os alertas cancelados.")
+            await query.edit_message_text("❌ Todos os alertas cancelados\\.", parse_mode="MarkdownV2")
             return
 
         if data == "alerta_confirmar":
             n = len(_alertas.get(chat_id, []))
-            await query.edit_message_text(f"✅ *{n} alertas confirmados!*\nVocê será avisado 5 min antes de cada corrida.", parse_mode="Markdown")
+            await query.edit_message_text(
+                f"✅ *{n} alertas confirmados\\!*\nVocê será avisado 5 min antes de cada corrida\\.",
+                parse_mode="MarkdownV2"
+            )
             return
 
         if data.startswith("alerta_"):
@@ -310,10 +326,8 @@ def start_bot():
             alertas_ativos = {a["texto"] for a in _alertas[chat_id]}
 
             if corrida["texto"] in alertas_ativos:
-                # Remove alerta
                 _alertas[chat_id] = [a for a in _alertas[chat_id] if a["texto"] != corrida["texto"]]
             else:
-                # Adiciona alerta
                 if corrida["brt_dt"]:
                     alerta_dt = corrida["brt_dt"] - timedelta(minutes=5)
                     _alertas[chat_id].append({
@@ -322,7 +336,6 @@ def start_bot():
                         "enviado": False
                     })
 
-            # Atualiza botões
             alertas_ativos = {a["texto"] for a in _alertas.get(chat_id, [])}
             keyboard = []
             for i, l in enumerate(linhas):
@@ -332,42 +345,40 @@ def start_bot():
                 keyboard.append([InlineKeyboardButton(label, callback_data=f"alerta_{i}")])
             keyboard.append([InlineKeyboardButton("✅ Confirmar alertas", callback_data="alerta_confirmar")])
             keyboard.append([InlineKeyboardButton("❌ Cancelar tudo",     callback_data="alerta_cancelar")])
-
             await query.edit_message_reply_markup(InlineKeyboardMarkup(keyboard))
 
     async def handler_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         texto = update.message.text
-        if   texto in ["🗓 Hoje",        "/hoje"]:    await mostrar_hoje(update)
-        elif texto in ["⚡ Flat",         "/flat"]:    await mostrar_hoje(update, filtro="FLAT",  titulo="FLAT")
-        elif texto in ["🌿 Jump",         "/jump"]:    await mostrar_hoje(update, filtro="JUMP",  titulo="JUMP")
-        elif texto in ["🇬🇧 Só UK",       "/uk"]:      await mostrar_hoje(update, filtro="UK",    titulo="SÓ UK")
-        elif texto in ["🇮🇪 Só Irlanda",  "/irlanda"]: await mostrar_hoje(update, filtro="IE",    titulo="SÓ IRLANDA")
-        elif texto in ["🏇 Todas",        "/todas"]:   await mostrar_hoje(update, titulo="TODAS")
-        elif texto in ["🔔 Alertas",      "/alertas"]: await mostrar_alertas(update, ctx)
-        elif texto in ["🕐 Horário",      "/horario"]:
+        if   texto in ["🗓 Hoje",         "/hoje"]:    await mostrar_hoje(update)
+        elif texto in ["⚡ Flat",          "/flat"]:    await mostrar_hoje(update, filtro="FLAT",  titulo="FLAT")
+        elif texto in ["🌿 Jump",          "/jump"]:    await mostrar_hoje(update, filtro="JUMP",  titulo="JUMP")
+        elif texto in ["🇬🇧 Só UK",        "/uk"]:      await mostrar_hoje(update, filtro="UK",    titulo="SÓ UK")
+        elif texto in ["🇮🇪 Só Irlanda",   "/irlanda"]: await mostrar_hoje(update, filtro="IE",    titulo="SÓ IRLANDA")
+        elif texto in ["🏇 Todas",         "/todas"]:   await mostrar_hoje(update, titulo="TODAS")
+        elif texto in ["🔔 Alertas",       "/alertas"]: await mostrar_alertas(update, ctx)
+        elif texto in ["🕐 Horário",       "/horario"]:
             now_uk  = datetime.now(UK_TZ)
             now_brt = datetime.now(BR_TZ)
-            dst     = bool(now_uk.dst())
             diff    = int((now_uk.utcoffset() - now_brt.utcoffset()).total_seconds() / 3600)
+            fuso    = "BST" if bool(now_uk.dst()) else "GMT"
             await update.message.reply_text(
                 f"🕐 *HORÁRIO ATUAL*\n━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🇬🇧 `{now_uk.strftime('%H:%M')}` — {'BST' if dst else 'GMT'}\n"
+                f"🇬🇧 `{now_uk.strftime('%H:%M')}` — {esc(fuso)}\n"
                 f"🇧🇷 `{now_brt.strftime('%H:%M')}` — Brasília\n\n"
                 f"UK está *{diff}h à frente*",
-                parse_mode="Markdown", reply_markup=MENU
+                parse_mode="MarkdownV2", reply_markup=MENU
             )
 
     async def run():
         telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
-        telegram_app.add_handler(CommandHandler("start",   cmd_start))
-        telegram_app.add_handler(CommandHandler("hoje",    handler_menu))
-        telegram_app.add_handler(CommandHandler("flat",    handler_menu))
-        telegram_app.add_handler(CommandHandler("jump",    handler_menu))
-        telegram_app.add_handler(CommandHandler("uk",      handler_menu))
-        telegram_app.add_handler(CommandHandler("irlanda", handler_menu))
-        telegram_app.add_handler(CommandHandler("todas",   handler_menu))
-        telegram_app.add_handler(CommandHandler("alertas", handler_menu))
-        telegram_app.add_handler(CommandHandler("horario", handler_menu))
+        for cmd, handler in [
+            ("start",   cmd_start),
+            ("hoje",    handler_menu), ("flat",    handler_menu),
+            ("jump",    handler_menu), ("uk",      handler_menu),
+            ("irlanda", handler_menu), ("todas",   handler_menu),
+            ("alertas", handler_menu), ("horario", handler_menu),
+        ]:
+            telegram_app.add_handler(CommandHandler(cmd, handler))
         telegram_app.add_handler(CallbackQueryHandler(callback_alerta))
         telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler_menu))
 
