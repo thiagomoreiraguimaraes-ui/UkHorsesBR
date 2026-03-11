@@ -233,7 +233,7 @@ def start_bot():
 
     MENU = ReplyKeyboardMarkup(
         [["🗓 Hoje",    "🔔 Alertas"],
-         ["⚡ Flat",    "🌿 Jump"],
+         ["🏁 Flat",    "🚧 Jump"],
          ["🇬🇧 Só UK",  "🇮🇪 Só Irlanda"],
          ["🏇 Todas",   "🕐 Horário"]],
         resize_keyboard=True, is_persistent=True
@@ -350,8 +350,8 @@ def start_bot():
     async def handler_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         texto = update.message.text
         if   texto in ["🗓 Hoje",         "/hoje"]:    await mostrar_hoje(update)
-        elif texto in ["⚡ Flat",          "/flat"]:    await mostrar_hoje(update, filtro="FLAT",  titulo="FLAT")
-        elif texto in ["🌿 Jump",          "/jump"]:    await mostrar_hoje(update, filtro="JUMP",  titulo="JUMP")
+        elif texto in ["🏁 Flat",          "/flat"]:    await mostrar_hoje(update, filtro="FLAT",  titulo="FLAT")
+        elif texto in ["🚧 Jump",          "/jump"]:    await mostrar_hoje(update, filtro="JUMP",  titulo="JUMP")
         elif texto in ["🇬🇧 Só UK",        "/uk"]:      await mostrar_hoje(update, filtro="UK",    titulo="SÓ UK")
         elif texto in ["🇮🇪 Só Irlanda",   "/irlanda"]: await mostrar_hoje(update, filtro="IE",    titulo="SÓ IRLANDA")
         elif texto in ["🏇 Todas",         "/todas"]:   await mostrar_hoje(update, titulo="TODAS")
