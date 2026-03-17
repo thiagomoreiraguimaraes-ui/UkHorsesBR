@@ -163,12 +163,19 @@ def processar_corridas(corridas, filtro=None):
     resultado.sort(key=lambda x: x["sort"])
     return resultado
 
-def formatar(corridas, titulo, filtro=None):
+def formatar(corridas, titulo, filtro=None, date_str=None):
     now_brt     = datetime.now(BR_TZ)
     now_brt_str = now_brt.strftime("%H:%M")
     now_uk      = datetime.now(UK_TZ)
     fuso        = "BST" if bool(now_uk.dst()) else "GMT"
-    data_label  = now_brt.strftime("%d/%m/%Y")
+    if date_str:
+        try:
+            y, m, d    = map(int, date_str.split("-"))
+            data_label = f"{d:02d}/{m:02d}/{y}"
+        except:
+            data_label = now_brt.strftime("%d/%m/%Y")
+    else:
+        data_label = now_brt.strftime("%d/%m/%Y")
     linhas      = processar_corridas(corridas, filtro)
 
     uk_c   = sum(1 for l in linhas if l["flag"] == "🇬🇧")
@@ -212,7 +219,7 @@ def worker_alertas(bot_app):
                 ultimo_envio_diario = now_brt.date()
                 corridas = get_corridas(data_hoje_brt())
                 if corridas:
-                    msg = formatar(corridas, "BOM DIA ☀️ — CORRIDAS DE HOJE")
+                    msg = formatar(corridas, "BOM DIA ☀️ — CORRIDAS DE HOJE", date_str=data_hoje_brt())
                     for chat_id in CONTATOS_FIXOS:
                         try:
                             await bot_app.bot.send_message(
@@ -295,7 +302,7 @@ def start_bot():
             await update.message.reply_text("❌ Nenhuma corrida encontrada\\.", parse_mode="MarkdownV2", reply_markup=MENU)
             return
         await update.message.reply_text(
-            formatar(corridas, titulo, filtro=filtro),
+            formatar(corridas, titulo, filtro=filtro, date_str=date_str),
             parse_mode="MarkdownV2", reply_markup=MENU
         )
 
